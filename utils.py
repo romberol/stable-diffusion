@@ -2,8 +2,10 @@ import numpy as np
 import tensorflow as tf
 from keras.preprocessing.image import ImageDataGenerator as GEN
 
+
 def invert_images(image):
     return 255 - image
+
 
 def variance_scheduler(T, s=0.008, max_beta=0.999):
     """
@@ -27,6 +29,7 @@ def variance_scheduler(T, s=0.008, max_beta=0.999):
     alpha_cumprod = np.cumprod(alpha)
     return alpha, alpha_cumprod, beta
 
+
 def form_dataset(data_dir, target_size, batch_size, validation_split, T, seed=0):
     """
     Forms a TensorFlow dataset from image data in a directory with data augmentation
@@ -45,53 +48,52 @@ def form_dataset(data_dir, target_size, batch_size, validation_split, T, seed=0)
     - train_dataset: TensorFlow dataset containing the training data
     - val_dataset: TensorFlow dataset containing the validation data
     """
-    
-    
+
     train_augment = GEN(
-        rescale = 1. / 255 ,
-        horizontal_flip = True ,
-        rotation_range = 10,
-        fill_mode = "constant",
-        cval = 255,
-        preprocessing_function = invert_images,
-        validation_split = validation_split,
+        rescale=1. / 255,
+        horizontal_flip=True,
+        rotation_range=10,
+        fill_mode="constant",
+        cval=255,
+        preprocessing_function=invert_images,
+        validation_split=validation_split,
     )
 
     val_augment = GEN(
-        rescale = 1. / 255 ,
-        preprocessing_function = invert_images,
-        validation_split = validation_split,
+        rescale=1. / 255,
+        preprocessing_function=invert_images,
+        validation_split=validation_split,
     )
-    
+
     train_data = train_augment.flow_from_directory(
-        data_dir ,
-        target_size = target_size[:2],
-        batch_size = batch_size,
-        subset = 'training',
-        class_mode = None,
-        seed = seed,
+        data_dir,
+        target_size=target_size[:2],
+        batch_size=batch_size,
+        subset='training',
+        class_mode=None,
+        seed=seed,
     )
 
     val_data = val_augment.flow_from_directory(
         data_dir,
-        target_size = target_size[:2],
-        batch_size = batch_size,
-        subset = 'validation',
-        class_mode = None,
-        seed = seed,
+        target_size=target_size[:2],
+        batch_size=batch_size,
+        subset='validation',
+        class_mode=None,
+        seed=seed,
     )
-    
+
     train_dataset = tf.data.Dataset.from_generator(
         lambda: train_data,
         output_signature=tf.TensorSpec(shape=(None, *target_size), dtype=tf.float32)
     )
-    val_dataset  = tf.data.Dataset.from_generator(
+    val_dataset = tf.data.Dataset.from_generator(
         lambda: val_data,
         output_signature=tf.TensorSpec(shape=(None, *target_size), dtype=tf.float32)
     )
-    
+
     alpha, alpha_cumprod, beta = variance_scheduler(T)
-    
+
     def prepare_batch(X):
         X = tf.cast(X, tf.float32)
         X_shape = tf.shape(X)
@@ -100,14 +102,15 @@ def form_dataset(data_dir, target_size, batch_size, validation_split, T, seed=0)
         alpha_cm = tf.reshape(alpha_cm, [X_shape[0]] + [1] * 3)
         noise = tf.random.normal(X_shape)
         return {
-            "X_noisy": alpha_cm ** 0.5 * X + (1 - alpha_cm) ** 0.5 * noise,
-            "time": t,
-        }, noise
-    
+                   "X_noisy": alpha_cm ** 0.5 * X + (1 - alpha_cm) ** 0.5 * noise,
+                   "time": t,
+               }, noise
+
     train_dataset = train_dataset.map(prepare_batch).prefetch(1)
     val_dataset = val_dataset.map(prepare_batch).prefetch(1)
-    
+
     return train_dataset, val_dataset
+
 
 def generate(model, batch_size=32):
     """
@@ -126,8 +129,8 @@ def generate(model, batch_size=32):
         noise = (tf.random.normal if t > 1 else tf.zeros)(tf.shape(X))
         X_noise = model({"X_noisy": X, "time": tf.constant([t] * batch_size)})
         X = (
-            1 / alpha[t] ** 0.5
-            * (X - beta[t] / (1 - alpha_cumprod[t]) ** 0.5 * X_noise)
-            + (1 - alpha[t]) ** 0.5 * noise
+                1 / alpha[t] ** 0.5
+                * (X - beta[t] / (1 - alpha_cumprod[t]) ** 0.5 * X_noise)
+                + (1 - alpha[t]) ** 0.5 * noise
         )
     return X

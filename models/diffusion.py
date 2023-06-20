@@ -2,10 +2,12 @@ import numpy as np
 import tensorflow as tf
 import tensorflow_addons as tfa
 
+
 class TimeEncoding(tf.keras.layers.Layer):
     """
     Sine/cosine positional embeddings
     """
+
     def __init__(self, T, embed_size, dtype=tf.float32, **kwargs):
         """
         - T (int): The maximum time value to encode (number of timesteps for diffusion model).
@@ -32,7 +34,7 @@ class TimeEncoding(tf.keras.layers.Layer):
         - Tensor: The time-encoded output tensor.
         """
         return tf.gather(self.time_encodings, inputs)
-    
+
     def get_config(self):
         config = super().get_config()
         config.update({
@@ -41,10 +43,12 @@ class TimeEncoding(tf.keras.layers.Layer):
         })
         return config
 
+
 class TimeResNet(tf.keras.layers.Layer):
     """
     Implements a residual block with time embedding.
     """
+
     def __init__(self, inp_channels, out_channels):
         """
         - inp_channels (int): The number of input channels.
@@ -55,12 +59,13 @@ class TimeResNet(tf.keras.layers.Layer):
         self.norm2 = tfa.layers.GroupNormalization(groups=out_channels, epsilon=1e-5)
         self.conv1 = tf.keras.layers.Conv2D(out_channels, 3, kernel_initializer="he_normal", padding="same")
         self.conv2 = tf.keras.layers.Conv2D(out_channels, 3, kernel_initializer="he_normal", padding="same")
-        
+
         self.time_embed = tf.keras.layers.Dense(out_channels, kernel_initializer="he_normal")
-        
-        self.skip = tf.keras.layers.Conv2D(out_channels, 1, kernel_initializer="he_normal", padding="same") if inp_channels != out_channels \
-                    else tf.keras.layers.Lambda(lambda x: x)
-        
+
+        self.skip = tf.keras.layers.Conv2D(out_channels, 1, kernel_initializer="he_normal",
+                                           padding="same") if inp_channels != out_channels \
+            else tf.keras.layers.Lambda(lambda x: x)
+
     def call(self, inputs):
         """
         Forward pass of the TimeResNet layer.
@@ -72,14 +77,14 @@ class TimeResNet(tf.keras.layers.Layer):
         - Tensor: The output tensor.
         """
         x, time = inputs
-        
+
         Z = self.norm1(x)
         Z = tf.keras.activations.swish(Z)
         Z = self.conv1(Z)
-        
+
         time = tf.keras.activations.swish(time)
         time_emb = self.time_embed(time)
-        
+
         Z = time_emb[:, tf.newaxis, tf.newaxis, :] + Z
 
         Z = self.norm2(Z)
@@ -87,12 +92,13 @@ class TimeResNet(tf.keras.layers.Layer):
         Z = self.conv2(Z)
 
         return self.skip(x) + Z
-    
-    
+
+
 class UNetAttention(tf.keras.layers.Layer):
     """
     Cross attention mechanism in a U-Net architecture.
     """
+
     def __init__(self, dim):
         """
         - dim (int): The number of filters.
@@ -104,7 +110,7 @@ class UNetAttention(tf.keras.layers.Layer):
         self.conv_out = tf.keras.layers.Conv2D(1, 1, activation="sigmoid")
         self.upsample = tf.keras.layers.UpSampling2D(2)
         self.multiply = tf.keras.layers.Multiply()
-        
+
     def call(self, inputs):
         """
         Forward pass of the UNetAttention layer.
@@ -116,7 +122,7 @@ class UNetAttention(tf.keras.layers.Layer):
 
         Returns:
         - Tensor: The output tensor.
-        """    
+        """
         x_inp, g_inp = inputs
 
         g = self.conv_g(g_inp)
@@ -130,7 +136,8 @@ class UNetAttention(tf.keras.layers.Layer):
 
         out = self.multiply([x_inp, g])
         return out
-    
+
+
 def get_diff_model(start_dim, out_dim, channels, input_shape, T, embed_size):
     """
     Constructs the diffusion model.
@@ -149,13 +156,13 @@ def get_diff_model(start_dim, out_dim, channels, input_shape, T, embed_size):
     X_noisy = tf.keras.layers.Input(shape=input_shape, name="X_noisy")
     time_input = tf.keras.layers.Input(shape=[], dtype=tf.int32, name="time")
     time_enc = TimeEncoding(T, embed_size)(time_input)
-    
+
     inp = tf.keras.Sequential([
         tf.keras.layers.Conv2D(start_dim, 3, kernel_initializer="he_normal", padding="same"),
         tfa.layers.GroupNormalization(groups=start_dim, epsilon=1e-5),
         tf.keras.layers.Activation("swish")
     ])
-    
+
     out = tf.keras.Sequential([
         tfa.layers.GroupNormalization(groups=channels[0], epsilon=1e-5),
         tf.keras.layers.Activation("swish"),
@@ -163,7 +170,7 @@ def get_diff_model(start_dim, out_dim, channels, input_shape, T, embed_size):
     ])
 
     Z = inp(X_noisy)
-    
+
     time_embed = tf.keras.Sequential([
         tf.keras.layers.Dense(start_dim * 4),
         tf.keras.layers.Activation("swish"),
@@ -172,34 +179,33 @@ def get_diff_model(start_dim, out_dim, channels, input_shape, T, embed_size):
 
     time = time_embed(time_enc)
 
-    skip = Z
     cross_skips = []
     last_dim = start_dim
-    
+
     for i in range(len(channels)):
         dim = channels[i]
         Z = TimeResNet(last_dim, dim)([Z, time])
-        if i != len(channels) -1 :
+        if i != len(channels) - 1:
             cross_skips.append(Z)
             Z = tf.keras.layers.Conv2D(dim, 3, strides=2, padding="same")(Z)
             last_dim = dim
-        
+
         else:
             attention = UNetAttention(last_dim)([cross_skips.pop(), Z])
             Z = tf.keras.layers.UpSampling2D(2)(Z)
             Z = tf.keras.layers.concatenate([Z, attention], axis=-1)
             last_dim += dim
-     
-    for i in reversed(range(len(channels)-1)):
+
+    for i in reversed(range(len(channels) - 1)):
         dim = channels[i]
         Z = TimeResNet(last_dim, dim)([Z, time])
-        
+
         if i != 0:
             attention = UNetAttention(dim)([cross_skips.pop(), Z])
             Z = tf.keras.layers.UpSampling2D(2)(Z)
             Z = tf.keras.layers.concatenate([Z, attention], axis=-1)
-            last_dim = dim + channels[i-1]
-    
+            last_dim = dim + channels[i - 1]
+
     outputs = out(Z)
-    
+
     return tf.keras.Model(inputs=[X_noisy, time_input], outputs=[outputs])

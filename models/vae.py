@@ -1,10 +1,12 @@
 import tensorflow as tf
 import tensorflow_addons as tfa
 
+
 class SampleLayer(tf.keras.layers.Layer):
     """
     Implements a sampling layer for use in variational autoencoder.
     """
+
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
 
@@ -24,28 +26,30 @@ class SampleLayer(tf.keras.layers.Layer):
         epsilon = tf.random.normal(tf.shape(log_var))
         kl_loss = -0.5 * tf.reduce_sum(1 + log_var - tf.square(mean) - tf.exp(log_var), axis=[1, 2, 3])
         self.add_loss(tf.reduce_mean(kl_loss))
-        return epsilon * tf.exp(log_var/2) + mean
-    
+        return epsilon * tf.exp(log_var / 2) + mean
+
 
 class ResNet(tf.keras.layers.Layer):
     """
     Class that implements a residual block for use in an autoencoder.
     """
+
     def __init__(self, inp_channels, out_channels, **kwargs):
         """
         - inp_channels (int): The number of input channels.
         - out_channels (int): The number of output channels.
         """
         super().__init__(**kwargs)
-        
+
         self.norm1 = tfa.layers.GroupNormalization(groups=inp_channels, epsilon=1e-5)
         self.norm2 = tfa.layers.GroupNormalization(groups=out_channels, epsilon=1e-5)
         self.conv1 = tf.keras.layers.Conv2D(out_channels, 3, kernel_initializer="he_normal", padding="same")
         self.conv2 = tf.keras.layers.Conv2D(out_channels, 3, kernel_initializer="he_normal", padding="same")
-        
-        self.skip = tf.keras.layers.Conv2D(out_channels, 1, kernel_initializer="he_normal", padding="same") if inp_channels != out_channels \
-                    else tf.keras.layers.Lambda(lambda x: x)
-        
+
+        self.skip = tf.keras.layers.Conv2D(out_channels, 1, kernel_initializer="he_normal",
+                                           padding="same") if inp_channels != out_channels \
+            else tf.keras.layers.Lambda(lambda x: x)
+
     def call(self, inputs):
         """
         Forward pass of the residual block.
@@ -65,12 +69,13 @@ class ResNet(tf.keras.layers.Layer):
         Z = self.conv2(Z)
 
         return self.skip(inputs) + Z
-    
-    
+
+
 class AttnBlock(tf.keras.layers.Layer):
     """
     Self Attention block
     """
+
     def __init__(self, channels):
         """
         - channels (int): The number of channels.
@@ -112,12 +117,13 @@ class AttnBlock(tf.keras.layers.Layer):
         out = tf.reshape(out, (b, c, h, w))
         out = self.proj_out(out)
         return x + out
-    
-    
+
+
 class Encoder(tf.keras.Model):
     """
     Encoder part of variational autoencoder.
     """
+
     def __init__(self, channels, channel_mults, n_resnet, z_channels, **kwargs):
         """
         - channels (int): The number of channels for the initial convolutional layer.
@@ -126,29 +132,29 @@ class Encoder(tf.keras.Model):
         - z_channels (int): The number of channels for the final encoded representation.
         """
         super().__init__(**kwargs)
-        
+
         self.inp_conv = tf.keras.layers.Conv2D(channels, 3, kernel_initializer="he_normal", padding="same")
-        
+
         self.down = tf.keras.Sequential()
-        
+
         channels_list = [mult * channels for mult in channel_mults]
-        
+
         for i in range(len(channel_mults) - 1):
             for _ in range(n_resnet):
-                self.down.add(ResNet(channels, channels_list[i+1]))
-                channels = channels_list[i+1]
-                
-            #downsample
-            self.down.add(tf.keras.layers.Conv2D(channels, 3, strides=2, padding='same', 
-                                                 kernel_initializer="he_normal"))   
-            
+                self.down.add(ResNet(channels, channels_list[i + 1]))
+                channels = channels_list[i + 1]
+
+            # downsample
+            self.down.add(tf.keras.layers.Conv2D(channels, 3, strides=2, padding='same',
+                                                 kernel_initializer="he_normal"))
+
         self.mid1 = ResNet(channels, channels)
         self.attn = AttnBlock(channels)
         self.mid2 = ResNet(channels, channels)
-        
+
         self.norm_out = tfa.layers.GroupNormalization(groups=channels, epsilon=1e-5)
         self.conv_out = tf.keras.layers.Conv2D(2 * z_channels, 3, kernel_initializer="he_normal", padding="same")
-        
+
     def call(self, inputs):
         """
         Forward pass of the encoder.
@@ -160,25 +166,26 @@ class Encoder(tf.keras.Model):
         - Tensor: The output tensor of the encoder.
         """
         Z = self.inp_conv(inputs)
-        
+
         Z = self.down(Z)
-            
+
         Z = self.mid1(Z)
         Z = self.attn(Z)
         Z = self.mid2(Z)
-        
+
         Z = self.norm_out(Z)
         Z = tf.keras.activations.swish(Z)
 
         Z = self.conv_out(Z)
-        
+
         return Z
-    
-    
+
+
 class Decoder(tf.keras.Model):
     """
     Decoder part of variational autoencoder.
     """
+
     def __init__(self, channels, channel_mults, n_resnet, out_channels, **kwargs):
         """
         - channels (int): The number of channels for the initial convolutional layer.
@@ -187,33 +194,31 @@ class Decoder(tf.keras.Model):
         - out_channels (int): The number of channels for the final reconstructed output.
         """
         super().__init__(**kwargs)
-        
+
         channels_list = [mult * channels for mult in channel_mults]
         channels = channels_list[-1]
-        
+
         self.inp_conv = tf.keras.layers.Conv2D(channels, 3, kernel_initializer="he_normal", padding="same")
-        
+
         self.mid1 = ResNet(channels, channels)
         self.attn = AttnBlock(channels)
         self.mid2 = ResNet(channels, channels)
-        
+
         self.up = tf.keras.Sequential()
-        
-        for i in reversed(range(len(channel_mults)-1)):
-            up_block = tf.keras.models.Sequential()
+
+        for i in reversed(range(len(channel_mults) - 1)):
             for _ in range(n_resnet):
                 self.up.add(ResNet(channels, channels_list[i]))
                 channels = channels_list[i]
 
-            #upsample
+            # upsample
             self.up.add(tf.keras.layers.Conv2DTranspose(channels, 3, padding="same", strides=2))
-            self.up.add(tf.keras.layers.Conv2D(channels, 3, padding="same", kernel_initializer="he_normal")) 
-            
-        
+            self.up.add(tf.keras.layers.Conv2D(channels, 3, padding="same", kernel_initializer="he_normal"))
+
         self.norm_out = tfa.layers.GroupNormalization(groups=channels, epsilon=1e-5)
-        self.conv_out = tf.keras.layers.Conv2D(out_channels, 3, kernel_initializer="glorot_normal", 
+        self.conv_out = tf.keras.layers.Conv2D(out_channels, 3, kernel_initializer="glorot_normal",
                                                activation="sigmoid", padding="same")
-        
+
     def call(self, inputs):
         """
         Forward pass of the decoder.
@@ -225,23 +230,25 @@ class Decoder(tf.keras.Model):
         - Tensor: The output tensor of the decoder.
         """
         Z = self.inp_conv(inputs)
-        
+
         Z = self.mid1(Z)
         Z = self.attn(Z)
         Z = self.mid2(Z)
-        
+
         Z = self.up(Z)
 
         Z = self.norm_out(Z)
         Z = tf.keras.activations.swish(Z)
         Z = self.conv_out(Z)
-        
+
         return Z
+
 
 class Autoencoder(tf.keras.Model):
     """
     Variational autoencoder
     """
+
     def __init__(self, encoder, decoder, emb_channels, z_channels, **kwargs):
         """
         - encoder (tf.keras.Model): The encoder model.
@@ -250,14 +257,14 @@ class Autoencoder(tf.keras.Model):
         - z_channels (int): The number of channels for the final embedding space.
         """
         super().__init__(**kwargs)
-        
+
         self.encoder = encoder
         self.decoder = decoder
-        
+
         self.quantization = tf.keras.layers.Conv2D(2 * emb_channels, 1, padding="same", kernel_initializer="he_normal")
         self.post_quantization = tf.keras.layers.Conv2D(z_channels, 1, padding="same", kernel_initializer="he_normal")
         self.sample = SampleLayer()
-        
+
     def encode(self, inputs):
         """
         Encodes the input tensor into a latent representation.
@@ -271,7 +278,7 @@ class Autoencoder(tf.keras.Model):
         Z = self.encoder(inputs)
         Z = self.quantization(Z)
         return self.sample(Z)
-    
+
     def decode(self, inputs):
         """
         Decodes the latent representation into a reconstructed output.
@@ -284,7 +291,7 @@ class Autoencoder(tf.keras.Model):
         """
         Z = self.post_quantization(inputs)
         return self.decoder(Z)
-    
+
     def call(self, inputs):
         """
         Forward pass of the autoencoder.
